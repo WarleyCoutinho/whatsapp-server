@@ -14,4 +14,7 @@ RUN pnpm build
 
 RUN mkdir -p /app/whatsapp-auth
 
+ENV PORT=8080
+EXPOSE 8080
+
 CMD ["node", "dist/index.js"]
