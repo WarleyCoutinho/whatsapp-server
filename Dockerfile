@@ -1,6 +1,6 @@
-FROM node:20-alpine
+FROM node:20-slim
 
-RUN apk add --no-cache libc6-compat python3 make g++
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
@@ -13,7 +13,5 @@ COPY . .
 RUN pnpm build
 
 RUN mkdir -p /app/whatsapp-auth
-
-EXPOSE 3001
 
 CMD ["node", "dist/index.js"]
