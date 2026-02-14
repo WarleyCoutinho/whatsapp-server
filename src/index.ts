@@ -16,7 +16,7 @@ try {
   console.error("[WhatsApp Server] ERRO ao registrar rotas:", error);
 }
 
-const port = Number(process.env.PORT) || 3001;
+const port = Number(process.env.PORT) || 8080;
 const host = "0.0.0.0";
 
 console.log(`[WhatsApp Server] Iniciando na porta ${port}...`);
