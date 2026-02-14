@@ -1,3 +1,4 @@
+import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import QRCode from "qrcode";
@@ -201,6 +202,15 @@ export async function disconnectProfessional(
       }
     }
     conn.socket = null;
+  }
+
+  // Limpar arquivos de auth para forçar novo QR code na reconexão
+  const authDir = path.join(AUTH_BASE_DIR, professionalId);
+  try {
+    await fs.rm(authDir, { recursive: true, force: true });
+    console.log(`[WhatsApp] Auth removido para profissional ${professionalId}`);
+  } catch {
+    /* ignore if dir doesn't exist */
   }
 
   conn.status = "disconnected";
