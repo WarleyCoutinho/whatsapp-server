@@ -5,8 +5,3 @@ dockerfilePath = "Dockerfile"
 [deploy]
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
-
-[[deploy.healthcheck]]
-type = "HTTP"
-path = "/health"
-port = 3320
