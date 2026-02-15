@@ -4,10 +4,10 @@ if (!process.env.API_KEY) {
   process.exit(1);
 }
 
-import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import Fastify from "fastify";
 
 const app = Fastify({
   logger: true,
@@ -33,13 +33,15 @@ await app.register(rateLimit, {
 });
 
 // Custom error handler — never leak stack traces
-app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
-  app.log.error(error);
-  const statusCode = error.statusCode ?? 500;
-  reply.status(statusCode).send({
-    error: statusCode >= 500 ? "Internal Server Error" : error.message,
-  });
-});
+app.setErrorHandler(
+  (error: Error & { statusCode?: number }, _request, reply) => {
+    app.log.error(error);
+    const statusCode = error.statusCode ?? 500;
+    reply.status(statusCode).send({
+      error: statusCode >= 500 ? "Internal Server Error" : error.message,
+    });
+  },
+);
 
 // Health check registered BEFORE heavy imports
 app.get("/health", async () => {
@@ -55,7 +57,7 @@ try {
   process.exit(1);
 }
 
-const port = Number(process.env.PORT) || 8080;
+const port = Number(process.env.PORT);
 const host = "0.0.0.0";
 
 try {
