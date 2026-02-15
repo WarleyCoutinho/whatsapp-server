@@ -10,6 +10,9 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/rate-limit": "^10.3.0",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "fastify": "^5.3.3",
     "qrcode": "^1.5.4"

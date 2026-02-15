@@ -14,13 +14,37 @@ interface ProfessionalConnection {
   qrDataUrl: string | null;
   retryCount: number;
   connectPromise: Promise<void> | null;
+  lastActivity: number;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const AUTH_BASE_DIR = path.join(__dirname, "..", "whatsapp-auth");
 const MAX_RETRIES = 5;
+const MAX_CONNECTIONS = 100;
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const RETRY_DELAYS = [2000, 5000, 10000, 20000, 30000];
 
 const connections = new Map<string, ProfessionalConnection>();
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validateProfessionalId(professionalId: string): void {
+  if (!UUID_REGEX.test(professionalId)) {
+    throw new Error("Invalid professional ID format");
+  }
+}
+
+function getSafeAuthDir(professionalId: string): string {
+  validateProfessionalId(professionalId);
+  const authDir = path.join(AUTH_BASE_DIR, professionalId);
+  const resolved = path.resolve(authDir);
+  const base = path.resolve(AUTH_BASE_DIR);
+  if (!resolved.startsWith(base + path.sep)) {
+    throw new Error("Path traversal detected");
+  }
+  return authDir;
+}
 
 async function loadBaileys() {
   const baileys = await import("@whiskeysockets/baileys");
@@ -28,7 +52,12 @@ async function loadBaileys() {
 }
 
 function getConnection(professionalId: string): ProfessionalConnection {
+  validateProfessionalId(professionalId);
+
   if (!connections.has(professionalId)) {
+    if (connections.size >= MAX_CONNECTIONS) {
+      throw new Error("Maximum number of connections reached");
+    }
     connections.set(professionalId, {
       socket: null,
       status: "disconnected",
@@ -36,10 +65,31 @@ function getConnection(professionalId: string): ProfessionalConnection {
       qrDataUrl: null,
       retryCount: 0,
       connectPromise: null,
+      lastActivity: Date.now(),
+      reconnectTimer: null,
     });
   }
-  return connections.get(professionalId)!;
+
+  const conn = connections.get(professionalId)!;
+  conn.lastActivity = Date.now();
+  return conn;
 }
+
+// Cleanup idle disconnected connections every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, conn] of connections.entries()) {
+    if (
+      conn.status === "disconnected" &&
+      now - conn.lastActivity > IDLE_TIMEOUT_MS
+    ) {
+      if (conn.reconnectTimer) {
+        clearTimeout(conn.reconnectTimer);
+      }
+      connections.delete(id);
+    }
+  }
+}, 5 * 60 * 1000);
 
 export function getConnectionStatus(professionalId: string): ConnectionStatus {
   return getConnection(professionalId).status;
@@ -85,14 +135,14 @@ export async function connectProfessional(
         fetchLatestBaileysVersion,
       } = await loadBaileys();
 
-      const authDir = path.join(AUTH_BASE_DIR, professionalId);
+      const authDir = getSafeAuthDir(professionalId);
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
       const { version } = await fetchLatestBaileysVersion();
 
       const socket = makeWASocket({
         auth: state,
         version,
-        printQRInTerminal: true,
+        printQRInTerminal: process.env.NODE_ENV !== "production",
         connectTimeoutMs: 60000,
         qrTimeout: 40000,
       });
@@ -116,9 +166,6 @@ export async function connectProfessional(
             conn.qrDataUrl = null;
           }
           conn.retryCount = 0;
-          console.log(
-            `[WhatsApp] QR code gerado para profissional ${professionalId}`,
-          );
         }
 
         if (connection === "open") {
@@ -127,9 +174,6 @@ export async function connectProfessional(
           conn.qrDataUrl = null;
           conn.retryCount = 0;
           conn.connectPromise = null;
-          console.log(
-            `[WhatsApp] Profissional ${professionalId} conectado`,
-          );
         }
 
         if (connection === "close") {
@@ -148,20 +192,13 @@ export async function connectProfessional(
               RETRY_DELAYS[Math.min(conn.retryCount, RETRY_DELAYS.length - 1)];
             conn.retryCount++;
             conn.status = "connecting";
-            console.log(
-              `[WhatsApp] Reconectando profissional ${professionalId} (tentativa ${conn.retryCount}/${MAX_RETRIES}) em ${delay}ms...`,
-            );
-            setTimeout(() => {
+            conn.reconnectTimer = setTimeout(() => {
+              conn.reconnectTimer = null;
               connectProfessional(professionalId);
             }, delay);
           } else {
             conn.status = "disconnected";
             conn.retryCount = 0;
-            console.log(
-              shouldReconnect
-                ? `[WhatsApp] Profissional ${professionalId}: máximo de tentativas atingido`
-                : `[WhatsApp] Profissional ${professionalId} deslogado`,
-            );
           }
         }
       });
@@ -170,8 +207,8 @@ export async function connectProfessional(
       conn.connectPromise = null;
       conn.socket = null;
       console.error(
-        `[WhatsApp] Erro ao conectar profissional ${professionalId}:`,
-        error,
+        `[WhatsApp] Connection error for ${professionalId}:`,
+        error instanceof Error ? error.message : "Unknown error",
       );
     }
   })();
@@ -185,6 +222,11 @@ export async function disconnectProfessional(
   professionalId: string,
 ): Promise<void> {
   const conn = getConnection(professionalId);
+
+  if (conn.reconnectTimer) {
+    clearTimeout(conn.reconnectTimer);
+    conn.reconnectTimer = null;
+  }
 
   if (conn.socket) {
     try {
@@ -204,11 +246,9 @@ export async function disconnectProfessional(
     conn.socket = null;
   }
 
-  // Limpar arquivos de auth para forçar novo QR code na reconexão
-  const authDir = path.join(AUTH_BASE_DIR, professionalId);
+  const authDir = getSafeAuthDir(professionalId);
   try {
     await fs.rm(authDir, { recursive: true, force: true });
-    console.log(`[WhatsApp] Auth removido para profissional ${professionalId}`);
   } catch {
     /* ignore if dir doesn't exist */
   }
@@ -220,6 +260,12 @@ export async function disconnectProfessional(
   conn.connectPromise = null;
 }
 
+export async function disconnectAll(): Promise<void> {
+  const ids = Array.from(connections.keys());
+  await Promise.allSettled(ids.map((id) => disconnectProfessional(id)));
+  connections.clear();
+}
+
 export async function sendGroupMessage(
   professionalId: string,
   groupName: string,
@@ -228,9 +274,6 @@ export async function sendGroupMessage(
   const conn = getConnection(professionalId);
 
   if (conn.status !== "connected" || !conn.socket) {
-    console.log(
-      `[WhatsApp] Profissional ${professionalId} não está conectado. Status: ${conn.status}`,
-    );
     return false;
   }
 
@@ -251,21 +294,15 @@ export async function sendGroupMessage(
     );
 
     if (!targetGroup) {
-      console.log(
-        `[WhatsApp] Grupo "${groupName}" não encontrado para profissional ${professionalId}`,
-      );
       return false;
     }
 
     await socket.sendMessage(targetGroup.id, { text: message });
-    console.log(
-      `[WhatsApp] Mensagem enviada no grupo "${groupName}" para profissional ${professionalId}`,
-    );
     return true;
   } catch (error) {
     console.error(
-      `[WhatsApp] Erro ao enviar mensagem para profissional ${professionalId}:`,
-      error,
+      `[WhatsApp] Send error for ${professionalId}:`,
+      error instanceof Error ? error.message : "Unknown error",
     );
     return false;
   }
