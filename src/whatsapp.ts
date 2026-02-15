@@ -314,7 +314,22 @@ export async function connectWithPhone(
       }
     });
 
-    const cleanPhone = phoneNumber.replace(/\D/g, "");
+    let cleanPhone = phoneNumber.replace(/\D/g, "");
+    if (!cleanPhone.startsWith("55")) {
+      cleanPhone = `55${cleanPhone}`;
+    }
+
+    // Baileys needs the socket registered before requesting pairing code
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 3000);
+      socket.ev.on("connection.update", (update) => {
+        if (update.qr) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+
     const code = await (
       socket as { requestPairingCode: (phone: string) => Promise<string> }
     ).requestPairingCode(cleanPhone);
