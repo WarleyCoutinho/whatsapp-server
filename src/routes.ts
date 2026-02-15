@@ -2,8 +2,10 @@ import { timingSafeEqual } from "crypto";
 import type { FastifyInstance } from "fastify";
 import {
   connectProfessional,
+  connectWithPhone,
   disconnectProfessional,
   getConnectionStatus,
+  getPairingCode,
   getQRDataUrl,
   sendGroupMessage,
 } from "./whatsapp.js";
@@ -60,6 +62,34 @@ export async function registerRoutes(app: FastifyInstance) {
     },
   );
 
+  app.post<{
+    Params: { professionalId: string };
+    Body: { phoneNumber: string };
+  }>(
+    "/connect-phone/:professionalId",
+    {
+      schema: {
+        params: professionalIdSchema,
+        body: {
+          type: "object" as const,
+          required: ["phoneNumber"] as const,
+          properties: {
+            phoneNumber: {
+              type: "string" as const,
+              minLength: 10,
+              maxLength: 20,
+            },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const { professionalId } = request.params;
+      const { phoneNumber } = request.body;
+      return connectWithPhone(professionalId, phoneNumber);
+    },
+  );
+
   app.get<{ Params: { professionalId: string } }>(
     "/status/:professionalId",
     { schema: { params: professionalIdSchema } },
@@ -67,7 +97,8 @@ export async function registerRoutes(app: FastifyInstance) {
       const { professionalId } = request.params;
       const status = getConnectionStatus(professionalId);
       const qrCode = getQRDataUrl(professionalId);
-      return { status, qrCode };
+      const pairingCode = getPairingCode(professionalId);
+      return { status, qrCode, pairingCode };
     },
   );
 

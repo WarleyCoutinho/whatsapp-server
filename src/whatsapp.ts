@@ -12,6 +12,7 @@ interface ProfessionalConnection {
   status: ConnectionStatus;
   qrCode: string | null;
   qrDataUrl: string | null;
+  pairingCode: string | null;
   retryCount: number;
   connectPromise: Promise<void> | null;
   lastActivity: number;
@@ -63,6 +64,7 @@ function getConnection(professionalId: string): ProfessionalConnection {
       status: "disconnected",
       qrCode: null,
       qrDataUrl: null,
+      pairingCode: null,
       retryCount: 0,
       connectPromise: null,
       lastActivity: Date.now(),
@@ -218,6 +220,122 @@ export async function connectProfessional(
   return { status: conn.status, qrCode: conn.qrDataUrl };
 }
 
+export function getPairingCode(professionalId: string): string | null {
+  return getConnection(professionalId).pairingCode;
+}
+
+export async function connectWithPhone(
+  professionalId: string,
+  phoneNumber: string,
+): Promise<{ status: ConnectionStatus; pairingCode: string | null }> {
+  const conn = getConnection(professionalId);
+
+  if (conn.status === "connected" && conn.socket) {
+    return { status: "connected", pairingCode: null };
+  }
+
+  if (conn.socket) {
+    try {
+      const oldSocket = conn.socket as { end: (reason?: unknown) => void };
+      oldSocket.end(undefined);
+    } catch {
+      /* ignore cleanup errors */
+    }
+    conn.socket = null;
+  }
+
+  conn.status = "connecting";
+  conn.qrCode = null;
+  conn.qrDataUrl = null;
+  conn.pairingCode = null;
+  conn.connectPromise = null;
+
+  try {
+    const {
+      default: makeWASocket,
+      useMultiFileAuthState,
+      DisconnectReason,
+      fetchLatestBaileysVersion,
+    } = await loadBaileys();
+
+    const authDir = getSafeAuthDir(professionalId);
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const socket = makeWASocket({
+      auth: state,
+      version,
+      printQRInTerminal: false,
+      connectTimeoutMs: 60000,
+      mobile: false,
+    });
+
+    conn.socket = socket;
+
+    socket.ev.on("creds.update", saveCreds);
+
+    socket.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect } = update;
+
+      if (connection === "open") {
+        conn.status = "connected";
+        conn.qrCode = null;
+        conn.qrDataUrl = null;
+        conn.pairingCode = null;
+        conn.retryCount = 0;
+        conn.connectPromise = null;
+      }
+
+      if (connection === "close") {
+        const statusCode = (
+          lastDisconnect?.error as { output?: { statusCode?: number } }
+        )?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        conn.socket = null;
+        conn.qrCode = null;
+        conn.qrDataUrl = null;
+        conn.pairingCode = null;
+        conn.connectPromise = null;
+
+        if (shouldReconnect && conn.retryCount < MAX_RETRIES) {
+          const delay =
+            RETRY_DELAYS[Math.min(conn.retryCount, RETRY_DELAYS.length - 1)];
+          conn.retryCount++;
+          conn.status = "connecting";
+          conn.reconnectTimer = setTimeout(() => {
+            conn.reconnectTimer = null;
+            connectWithPhone(professionalId, phoneNumber);
+          }, delay);
+        } else {
+          conn.status = "disconnected";
+          conn.retryCount = 0;
+        }
+      }
+    });
+
+    const cleanPhone = phoneNumber.replace(/\D/g, "");
+    const code = await (
+      socket as { requestPairingCode: (phone: string) => Promise<string> }
+    ).requestPairingCode(cleanPhone);
+
+    conn.pairingCode = code;
+    conn.status = "qr_code";
+
+    return { status: conn.status, pairingCode: code };
+  } catch (error) {
+    conn.status = "disconnected";
+    conn.connectPromise = null;
+    conn.socket = null;
+    conn.pairingCode = null;
+    console.error(
+      `[WhatsApp] Phone connection error for ${professionalId}:`,
+      error instanceof Error ? error.message : "Unknown error",
+    );
+    return { status: "disconnected", pairingCode: null };
+  }
+}
+
 export async function disconnectProfessional(
   professionalId: string,
 ): Promise<void> {
@@ -256,6 +374,7 @@ export async function disconnectProfessional(
   conn.status = "disconnected";
   conn.qrCode = null;
   conn.qrDataUrl = null;
+  conn.pairingCode = null;
   conn.retryCount = 0;
   conn.connectPromise = null;
 }
