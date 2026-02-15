@@ -288,9 +288,18 @@ export async function sendGroupMessage(
       ) => Promise<unknown>;
     };
 
+    const normalize = (str: string) =>
+      str
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-zA-Z0-9\s]/g, "")
+        .toLowerCase()
+        .trim();
+
     const groups = await socket.groupFetchAllParticipating();
+    const normalizedInput = normalize(groupName);
     const targetGroup = Object.values(groups).find(
-      (group) => group.subject.toLowerCase() === groupName.toLowerCase(),
+      (group) => normalize(group.subject) === normalizedInput,
     );
 
     if (!targetGroup) {
