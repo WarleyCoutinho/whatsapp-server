@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-slim AS builder
+FROM node:22.22.0-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@latest --activate
@@ -13,7 +13,7 @@ COPY . .
 RUN pnpm build
 
 # Production stage
-FROM node:20-slim AS production
+FROM node:22.22.0-slim AS production
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
@@ -31,8 +31,8 @@ RUN addgroup --system --gid 1001 nodejs && \
 
 USER fastify
 
-ENV PORT=3320
+ENV PORT=3321
 ENV NODE_ENV=production
-EXPOSE 3320
+EXPOSE 3321
 
 CMD ["node", "dist/index.js"]

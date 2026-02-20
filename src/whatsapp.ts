@@ -110,19 +110,8 @@ export async function connectProfessional(
     return { status: "connected", qrCode: null };
   }
 
-  if (conn.connectPromise) {
-    return { status: conn.status, qrCode: conn.qrDataUrl };
-  }
-
-  if (conn.socket) {
-    try {
-      const oldSocket = conn.socket as { end: (reason?: unknown) => void };
-      oldSocket.end(undefined);
-    } catch {
-      /* ignore cleanup errors */
-    }
-    conn.socket = null;
-  }
+  // Destruir sessão anterior antes de criar nova
+  await disconnectProfessional(professionalId);
 
   conn.status = "connecting";
   conn.qrCode = null;
@@ -234,15 +223,8 @@ export async function connectWithPhone(
     return { status: "connected", pairingCode: null };
   }
 
-  if (conn.socket) {
-    try {
-      const oldSocket = conn.socket as { end: (reason?: unknown) => void };
-      oldSocket.end(undefined);
-    } catch {
-      /* ignore cleanup errors */
-    }
-    conn.socket = null;
-  }
+  // Destruir sessão anterior antes de criar nova
+  await disconnectProfessional(professionalId);
 
   conn.status = "connecting";
   conn.qrCode = null;
@@ -320,8 +302,11 @@ export async function connectWithPhone(
     }
 
     // Baileys needs the socket registered before requesting pairing code
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 3000);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Timeout ao aguardar socket para pareamento")),
+        15000,
+      );
       socket.ev.on("connection.update", (update) => {
         if (update.qr) {
           clearTimeout(timer);
