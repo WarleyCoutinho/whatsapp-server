@@ -93,144 +93,36 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-export function getConnectionStatus(professionalId: string): ConnectionStatus {
-  return getConnection(professionalId).status;
-}
-
-export function getQRDataUrl(professionalId: string): string | null {
-  return getConnection(professionalId).qrDataUrl;
-}
-
-export async function connectProfessional(
-  professionalId: string,
-): Promise<{ status: ConnectionStatus; qrCode: string | null }> {
-  const conn = getConnection(professionalId);
-
-  if (conn.status === "connected" && conn.socket) {
-    return { status: "connected", qrCode: null };
+// Internal: close socket without deleting auth files (for reconnect)
+function _cleanupSocket(conn: ProfessionalConnection): void {
+  if (conn.reconnectTimer) {
+    clearTimeout(conn.reconnectTimer);
+    conn.reconnectTimer = null;
   }
-
-  // Destruir sessão anterior antes de criar nova
-  await disconnectProfessional(professionalId);
-
-  conn.status = "connecting";
-  conn.qrCode = null;
-  conn.qrDataUrl = null;
-
-  conn.connectPromise = (async () => {
+  if (conn.socket) {
     try {
-      const {
-        default: makeWASocket,
-        useMultiFileAuthState,
-        DisconnectReason,
-        fetchLatestBaileysVersion,
-      } = await loadBaileys();
-
-      const authDir = getSafeAuthDir(professionalId);
-      const { state, saveCreds } = await useMultiFileAuthState(authDir);
-      const { version } = await fetchLatestBaileysVersion();
-
-      const socket = makeWASocket({
-        auth: state,
-        version,
-        printQRInTerminal: process.env.NODE_ENV !== "production",
-        connectTimeoutMs: 60000,
-        qrTimeout: 40000,
-      });
-
-      conn.socket = socket;
-
-      socket.ev.on("creds.update", saveCreds);
-
-      socket.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-          conn.status = "qr_code";
-          conn.qrCode = qr;
-          try {
-            conn.qrDataUrl = await QRCode.toDataURL(qr, {
-              width: 256,
-              margin: 2,
-            });
-          } catch {
-            conn.qrDataUrl = null;
-          }
-          conn.retryCount = 0;
-        }
-
-        if (connection === "open") {
-          conn.status = "connected";
-          conn.qrCode = null;
-          conn.qrDataUrl = null;
-          conn.retryCount = 0;
-          conn.connectPromise = null;
-        }
-
-        if (connection === "close") {
-          const statusCode = (
-            lastDisconnect?.error as { output?: { statusCode?: number } }
-          )?.output?.statusCode;
-          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-          conn.socket = null;
-          conn.qrCode = null;
-          conn.qrDataUrl = null;
-          conn.connectPromise = null;
-
-          if (shouldReconnect && conn.retryCount < MAX_RETRIES) {
-            const delay =
-              RETRY_DELAYS[Math.min(conn.retryCount, RETRY_DELAYS.length - 1)];
-            conn.retryCount++;
-            conn.status = "connecting";
-            conn.reconnectTimer = setTimeout(() => {
-              conn.reconnectTimer = null;
-              connectProfessional(professionalId);
-            }, delay);
-          } else {
-            conn.status = "disconnected";
-            conn.retryCount = 0;
-          }
-        }
-      });
-    } catch (error) {
-      conn.status = "disconnected";
-      conn.connectPromise = null;
-      conn.socket = null;
-      console.error(
-        `[WhatsApp] Connection error for ${professionalId}:`,
-        error instanceof Error ? error.message : "Unknown error",
-      );
+      const socket = conn.socket as { end: (reason?: unknown) => void };
+      socket.end(undefined);
+    } catch {
+      /* ignore */
     }
-  })();
-
-  await conn.connectPromise;
-
-  return { status: conn.status, qrCode: conn.qrDataUrl };
-}
-
-export function getPairingCode(professionalId: string): string | null {
-  return getConnection(professionalId).pairingCode;
-}
-
-export async function connectWithPhone(
-  professionalId: string,
-  phoneNumber: string,
-): Promise<{ status: ConnectionStatus; pairingCode: string | null }> {
-  const conn = getConnection(professionalId);
-
-  if (conn.status === "connected" && conn.socket) {
-    return { status: "connected", pairingCode: null };
+    conn.socket = null;
   }
+  conn.qrCode = null;
+  conn.qrDataUrl = null;
+  conn.connectPromise = null;
+}
 
-  // Destruir sessão anterior antes de criar nova
-  await disconnectProfessional(professionalId);
+// Internal: create Baileys socket with existing auth state (preserves session)
+async function _createConnectedSocket(
+  professionalId: string,
+  mode: "qr" | "phone",
+): Promise<void> {
+  const conn = getConnection(professionalId);
 
   conn.status = "connecting";
   conn.qrCode = null;
   conn.qrDataUrl = null;
-  conn.pairingCode = null;
-  conn.connectPromise = null;
 
   try {
     const {
@@ -247,9 +139,10 @@ export async function connectWithPhone(
     const socket = makeWASocket({
       auth: state,
       version,
-      printQRInTerminal: false,
+      printQRInTerminal: mode === "qr" && process.env.NODE_ENV !== "production",
       connectTimeoutMs: 60000,
-      mobile: false,
+      qrTimeout: 60000,
+      ...(mode === "phone" ? { mobile: false } : {}),
     });
 
     conn.socket = socket;
@@ -257,7 +150,21 @@ export async function connectWithPhone(
     socket.ev.on("creds.update", saveCreds);
 
     socket.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect } = update;
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr && mode === "qr") {
+        conn.status = "qr_code";
+        conn.qrCode = qr;
+        try {
+          conn.qrDataUrl = await QRCode.toDataURL(qr, {
+            width: 256,
+            margin: 2,
+          });
+        } catch {
+          conn.qrDataUrl = null;
+        }
+        conn.retryCount = 0;
+      }
 
       if (connection === "open") {
         conn.status = "connected";
@@ -274,11 +181,8 @@ export async function connectWithPhone(
         )?.output?.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-        conn.socket = null;
-        conn.qrCode = null;
-        conn.qrDataUrl = null;
-        conn.pairingCode = null;
-        conn.connectPromise = null;
+        // Only cleanup socket, preserve auth files for reconnect
+        _cleanupSocket(conn);
 
         if (shouldReconnect && conn.retryCount < MAX_RETRIES) {
           const delay =
@@ -287,7 +191,8 @@ export async function connectWithPhone(
           conn.status = "connecting";
           conn.reconnectTimer = setTimeout(() => {
             conn.reconnectTimer = null;
-            connectWithPhone(professionalId, phoneNumber);
+            // Reconnect preserving auth state (no disconnect/delete)
+            _createConnectedSocket(professionalId, mode);
           }, delay);
         } else {
           conn.status = "disconnected";
@@ -295,19 +200,93 @@ export async function connectWithPhone(
         }
       }
     });
+  } catch (error) {
+    conn.status = "disconnected";
+    conn.connectPromise = null;
+    conn.socket = null;
+    console.error(
+      `[WhatsApp] Connection error for ${professionalId}:`,
+      error instanceof Error ? error.message : "Unknown error",
+    );
+  }
+}
+
+export function getConnectionStatus(professionalId: string): ConnectionStatus {
+  return getConnection(professionalId).status;
+}
+
+export function getQRDataUrl(professionalId: string): string | null {
+  return getConnection(professionalId).qrDataUrl;
+}
+
+export function getPairingCode(professionalId: string): string | null {
+  return getConnection(professionalId).pairingCode;
+}
+
+export async function connectProfessional(
+  professionalId: string,
+): Promise<{ status: ConnectionStatus; qrCode: string | null }> {
+  const conn = getConnection(professionalId);
+
+  if (conn.status === "connected" && conn.socket) {
+    return { status: "connected", qrCode: null };
+  }
+
+  // Full cleanup: destroy previous session for a fresh QR
+  await disconnectProfessional(professionalId);
+
+  // Create socket (auth files were deleted, so Baileys generates new QR)
+  conn.connectPromise = _createConnectedSocket(professionalId, "qr");
+  await conn.connectPromise;
+
+  return { status: conn.status, qrCode: conn.qrDataUrl };
+}
+
+export async function connectWithPhone(
+  professionalId: string,
+  phoneNumber: string,
+): Promise<{ status: ConnectionStatus; pairingCode: string | null }> {
+  const conn = getConnection(professionalId);
+
+  if (conn.status === "connected" && conn.socket) {
+    return { status: "connected", pairingCode: null };
+  }
+
+  // Full cleanup for a fresh pairing
+  await disconnectProfessional(professionalId);
+
+  conn.pairingCode = null;
+
+  try {
+    // Create socket in phone mode
+    await _createConnectedSocket(professionalId, "phone");
+
+    const socket = conn.socket;
+    if (!socket) {
+      throw new Error("Socket not created");
+    }
 
     let cleanPhone = phoneNumber.replace(/\D/g, "");
     if (!cleanPhone.startsWith("55")) {
       cleanPhone = `55${cleanPhone}`;
     }
 
-    // Baileys needs the socket registered before requesting pairing code
+    // Wait for socket to be ready before requesting pairing code
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error("Timeout ao aguardar socket para pareamento")),
         15000,
       );
-      socket.ev.on("connection.update", (update) => {
+      (
+        socket as {
+          ev: {
+            on: (
+              event: string,
+              cb: (update: { qr?: string }) => void,
+            ) => void;
+          };
+        }
+      ).ev.on("connection.update", (update) => {
         if (update.qr) {
           clearTimeout(timer);
           resolve();

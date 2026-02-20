@@ -31,8 +31,8 @@ RUN addgroup --system --gid 1001 nodejs && \
 
 USER fastify
 
-ENV PORT=3321
+ENV PORT=3320
 ENV NODE_ENV=production
-EXPOSE 3321
+EXPOSE 3320
 
 CMD ["node", "dist/index.js"]
