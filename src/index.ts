@@ -1,4 +1,3 @@
-// Validate required environment variables before anything else
 if (!process.env.API_KEY) {
   console.error("[FATAL] Missing required environment variable: API_KEY");
   process.exit(1);
