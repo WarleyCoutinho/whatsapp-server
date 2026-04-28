@@ -31,8 +31,8 @@ COPY --from=builder /app/dist ./dist
 # (opcional) garante que /data existe
 RUN mkdir -p /data
 
-ENV PORT=3321
+ENV PORT=3320
 ENV NODE_ENV=production
-EXPOSE 3321
+EXPOSE 3320
 
 CMD ["node", "dist/index.js"]
