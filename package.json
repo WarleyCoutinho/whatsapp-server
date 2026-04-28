@@ -16,6 +16,7 @@
     "@google/generative-ai": "^0.24.1",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "fastify": "^5.3.3",
+    "https-proxy-agent": "^9.0.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {

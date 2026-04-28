@@ -1,3 +1,43 @@
+import fs from "fs/promises";
+
+// Garante que o diretório de sessões existe com permissão correta
+// DEVE rodar antes de qualquer import do Baileys ou das rotas
+// O Railway monta o volume antes do container iniciar, então
+// criamos o diretório aqui — pelo próprio processo (usuário fastify)
+const AUTH_DIR = process.env.AUTH_DIR || "/data/whatsapp-auth";
+/* try {
+  await fs.mkdir("/app/whatsapp-auth", { recursive: true, mode: 0o750 });
+  console.log("[WhatsApp Server] Diretório de sessões pronto.");
+} catch (err) {
+  // Se já existir com permissão correta, ignora
+  if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+    console.error(
+      "[WhatsApp Server] FATAL: Não foi possível criar o diretório de sessões:",
+      err,
+    );
+    process.exit(1);
+  }
+} */
+try {
+  await fs.mkdir(AUTH_DIR, { recursive: true });
+
+  try {
+    await fs.chmod(AUTH_DIR, 0o750);
+  } catch (err) {
+    console.warn(
+      "[WhatsApp Server] Aviso: não foi possível ajustar permissões (ok se já estiver correto)",
+    );
+  }
+
+  console.log("[WhatsApp Server] Diretório de sessões pronto:", AUTH_DIR);
+} catch (err) {
+  console.error(
+    "[WhatsApp Server] FATAL: Não foi possível preparar o diretório:",
+    err,
+  );
+  process.exit(1);
+}
+// Validate required environment variables before anything else
 if (!process.env.API_KEY) {
   console.error("[FATAL] Missing required environment variable: API_KEY");
   process.exit(1);

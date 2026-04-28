@@ -24,15 +24,15 @@ RUN pnpm install --frozen-lockfile --prod && pnpm store prune
 
 COPY --from=builder /app/dist ./dist
 
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 --ingroup nodejs fastify && \
-    mkdir -p /app/whatsapp-auth && \
-    chown -R fastify:nodejs /app/whatsapp-auth
+# ⚠️ REMOVIDO usuário fastify (causava EACCES no volume)
+# RUN addgroup --system --gid 1001 nodejs && \
+#     adduser --system --uid 1001 --ingroup nodejs fastify
 
-USER fastify
+# (opcional) garante que /data existe
+RUN mkdir -p /data
 
-ENV PORT=3320
+ENV PORT=3321
 ENV NODE_ENV=production
-EXPOSE 3320
+EXPOSE 3321
 
 CMD ["node", "dist/index.js"]

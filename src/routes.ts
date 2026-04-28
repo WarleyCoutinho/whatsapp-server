@@ -4,9 +4,11 @@ import {
   connectProfessional,
   connectWithPhone,
   disconnectProfessional,
+  getActiveConnectionCount,
   getConnectionStatus,
   getPairingCode,
   getQRDataUrl,
+  isAtConnectionLimit,
   sendGroupMessage,
 } from "./whatsapp.js";
 
@@ -25,13 +27,13 @@ export async function registerRoutes(app: FastifyInstance) {
   const apiKey = process.env.API_KEY;
 
   if (!apiKey) {
-    app.log.error(
-      "FATAL: API_KEY is not set. All requests will be rejected.",
-    );
+    app.log.error("FATAL: API_KEY is not set. All requests will be rejected.");
   }
 
+  // Auth guard
   app.addHook("onRequest", async (request, reply) => {
     if (request.routeOptions?.url === "/health") return;
+    if (request.routeOptions?.url === "/connections/stats") return;
 
     if (!apiKey) {
       return reply.status(503).send({ error: "Server misconfigured" });
@@ -43,24 +45,52 @@ export async function registerRoutes(app: FastifyInstance) {
       return reply.status(401).send({ error: "Unauthorized" });
     }
 
-    const isValid = timingSafeEqual(
-      Buffer.from(provided),
-      Buffer.from(apiKey),
-    );
+    const isValid = timingSafeEqual(Buffer.from(provided), Buffer.from(apiKey));
 
     if (!isValid) {
       return reply.status(401).send({ error: "Unauthorized" });
     }
   });
 
+  // ------------------------------------------------------------------
+  // Stats — útil para monitorar no Railway
+  // ------------------------------------------------------------------
+
+  app.get("/connections/stats", async () => {
+    return {
+      active: getActiveConnectionCount(),
+      limit: 100,
+      atLimit: isAtConnectionLimit(),
+    };
+  });
+
+  // ------------------------------------------------------------------
+  // Connect via QR Code
+  // ------------------------------------------------------------------
+
   app.post<{ Params: { professionalId: string } }>(
     "/connect/:professionalId",
     { schema: { params: professionalIdSchema } },
-    async (request) => {
+    async (request, reply) => {
+      if (isAtConnectionLimit()) {
+        return reply.status(503).send({
+          error: "Limite de conexões atingido",
+          message:
+            "O servidor atingiu o máximo de 100 conexões simultâneas. " +
+            "Tente novamente mais tarde ou entre em contato com o suporte.",
+          active: getActiveConnectionCount(),
+          limit: 100,
+        });
+      }
+
       const { professionalId } = request.params;
       return connectProfessional(professionalId);
     },
   );
+
+  // ------------------------------------------------------------------
+  // Connect via número de telefone (pairing code)
+  // ------------------------------------------------------------------
 
   app.post<{
     Params: { professionalId: string };
@@ -83,12 +113,27 @@ export async function registerRoutes(app: FastifyInstance) {
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
+      if (isAtConnectionLimit()) {
+        return reply.status(503).send({
+          error: "Limite de conexões atingido",
+          message:
+            "O servidor atingiu o máximo de 100 conexões simultâneas. " +
+            "Tente novamente mais tarde ou entre em contato com o suporte.",
+          active: getActiveConnectionCount(),
+          limit: 100,
+        });
+      }
+
       const { professionalId } = request.params;
       const { phoneNumber } = request.body;
       return connectWithPhone(professionalId, phoneNumber);
     },
   );
+
+  // ------------------------------------------------------------------
+  // Status
+  // ------------------------------------------------------------------
 
   app.get<{ Params: { professionalId: string } }>(
     "/status/:professionalId",
@@ -102,6 +147,10 @@ export async function registerRoutes(app: FastifyInstance) {
     },
   );
 
+  // ------------------------------------------------------------------
+  // Disconnect
+  // ------------------------------------------------------------------
+
   app.post<{ Params: { professionalId: string } }>(
     "/disconnect/:professionalId",
     { schema: { params: professionalIdSchema } },
@@ -111,6 +160,10 @@ export async function registerRoutes(app: FastifyInstance) {
       return { status: "disconnected" };
     },
   );
+
+  // ------------------------------------------------------------------
+  // Send message to group
+  // ------------------------------------------------------------------
 
   app.post<{
     Body: { professionalId: string; groupName: string; message: string };

@@ -72,126 +72,17 @@ const ESCALATION_KEYWORDS = [
 const MAX_HISTORY = 10;
 const conversationHistory = new Map<string, Content[]>();
 
-type AIProvider = "gemini" | "openai" | "anthropic";
-
-interface ChatMessage {
-  role: "user" | "model";
-  content: string;
-}
-
-function getProvider(): AIProvider {
-  const provider = (process.env.AI_PROVIDER ?? "gemini") as AIProvider;
-  if (!["gemini", "openai", "anthropic"].includes(provider)) {
-    throw new Error(
-      `AI_PROVIDER "${provider}" não suportado. Use: gemini, openai ou anthropic`,
-    );
-  }
-  return provider;
-}
-
-function getApiKey(): string {
-  const key = process.env.AI_API_KEY;
-  if (!key) {
-    throw new Error("AI_API_KEY não configurada");
-  }
-  return key;
-}
-
-function getModel(): string {
-  return process.env.AI_MODEL ?? "gemini-1.5-flash";
-}
-
 let genAIInstance: GoogleGenerativeAI | null = null;
 
 function getGenAI(): GoogleGenerativeAI {
   if (!genAIInstance) {
-    genAIInstance = new GoogleGenerativeAI(getApiKey());
+    const apiKey = process.env.AI_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    if (!apiKey) {
+      throw new Error("AI_API_KEY not set");
+    }
+    genAIInstance = new GoogleGenerativeAI(apiKey);
   }
   return genAIInstance;
-}
-
-async function responderGemini(
-  history: Content[],
-  message: string,
-): Promise<string> {
-  const genAI = getGenAI();
-  const model = genAI.getGenerativeModel({
-    model: getModel(),
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 400,
-    },
-  });
-
-  const chat = model.startChat({
-    history: history.slice(0, -1),
-    systemInstruction: SYSTEM_PROMPT,
-  });
-
-  const result = await chat.sendMessage(message);
-  return result.response.text();
-}
-
-async function responderOpenAI(
-  history: Content[],
-  message: string,
-): Promise<string> {
-  const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...history.map((h) => ({
-      role: h.role === "model" ? "assistant" : "user",
-      content: h.parts.map((p) => ("text" in p ? p.text : "")).join(""),
-    })),
-    { role: "user", content: message },
-  ];
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${getApiKey()}`,
-    },
-    body: JSON.stringify({
-      model: getModel(),
-      max_tokens: 400,
-      temperature: 0.7,
-      messages,
-    }),
-  });
-
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? "";
-}
-
-async function responderAnthropic(
-  history: Content[],
-  message: string,
-): Promise<string> {
-  const messages = [
-    ...history.map((h) => ({
-      role: h.role === "model" ? ("assistant" as const) : ("user" as const),
-      content: h.parts.map((p) => ("text" in p ? p.text : "")).join(""),
-    })),
-    { role: "user" as const, content: message },
-  ];
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": getApiKey(),
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: getModel(),
-      max_tokens: 400,
-      system: SYSTEM_PROMPT,
-      messages,
-    }),
-  });
-
-  const data = await res.json();
-  return data.content?.[0]?.text ?? "";
 }
 
 export function deveEscalarParaHumano(message: string): boolean {
@@ -204,7 +95,15 @@ export async function responderMensagem(
   message: string,
 ): Promise<string> {
   try {
-    const provider = getProvider();
+    const genAI = getGenAI();
+    const model = genAI.getGenerativeModel({
+      model: process.env.AI_MODEL ?? "gemini-1.5-flash",
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 400,
+      },
+    });
+
     const history = conversationHistory.get(phoneNumber) ?? [];
 
     history.push({
@@ -216,20 +115,13 @@ export async function responderMensagem(
       history.splice(0, history.length - MAX_HISTORY * 2);
     }
 
-    let responseText: string;
+    const chat = model.startChat({
+      history: history.slice(0, -1),
+      systemInstruction: SYSTEM_PROMPT,
+    });
 
-    switch (provider) {
-      case "openai":
-        responseText = await responderOpenAI(history, message);
-        break;
-      case "anthropic":
-        responseText = await responderAnthropic(history, message);
-        break;
-      case "gemini":
-      default:
-        responseText = await responderGemini(history, message);
-        break;
-    }
+    const result = await chat.sendMessage(message);
+    const responseText = result.response.text();
 
     history.push({
       role: "model",
